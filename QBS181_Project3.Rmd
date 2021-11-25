@@ -1,0 +1,465 @@
+---
+title: "QBS181_ProblemSet3"
+author: "Matthew Chan"
+date: "10/28/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Part One
+
+### Question One
+
+Recall the HigherMe dataset. On the canvas homepage, I've linked a csv file which contains the data cleaning up to the step where we need to convert those invoices which are quarterly to monthly invoices. Using the same logic you applied in the excel project, convert quarterly invoices to monthly invoices in R.  Display the first 10 rows of your updated dataset. 
+
+```{r}
+#your code here
+library(dplyr)
+library(lubridate)
+library(tidyverse)
+library(data.table)
+Higherme <- read.csv("HigherMeDataForRData.csv")
+
+names(Higherme)[names(Higherme) == "ï..Invoice.Number"] <- "Invoice_Number"
+Higherme$Invoice.Date <- as.Date(Higherme$Invoice.Date, format = "%m/%d/%y")
+head(Higherme)
+
+
+```
+```{r}
+
+# Remove dollar signs function as provided in class 
+rmCurrency<-function(x){
+  
+  x<-trimws(x) #trim whitespace
+  
+  if(grepl("\\$",x[1])){ #if '$' found in x
+    x<-sub("\\$", "",x) #remove $
+    x<-sub("\\,", "",x) #remove ,
+    x[x=="-"]<-0 #recode zeros
+  }
+  return(x)
+}
+Higherme$Amount <- rmCurrency(Higherme$Amount)
+Higherme$Amount <- as.integer(Higherme$Amount)
+Higherme$Amount <- Higherme$Amount/ 3 
+head(Higherme)
+```
+```{r}
+
+quarterly2 <- Higherme %>%
+  filter(Quarterly.Monthly == "QUARTERLY") %>%
+  arrange(Invoice_Number)
+quarterly3 <- Higherme %>%
+  filter(Quarterly.Monthly == "QUARTERLY") %>%
+  arrange(Invoice_Number)
+
+```
+
+```{r}
+
+quarterly2$Invoice.Date <- ymd(quarterly2$Invoice.Date) - 30
+head(quarterly2)
+quarterly3$Invoice.Date <- ymd(quarterly3$Invoice.Date) - 60
+head(quarterly3)
+```
+```{r}
+# Binding my quarterly3 and quarterly2 dataframe together
+merged <- rbind(quarterly3, quarterly2)
+
+```
+
+
+
+```{r}
+# Putting together the final dataframe
+merged_final <- rbind(merged, Higherme)
+
+# Changing all the values to Monthly from Quarterly 
+merged_final$Quarterly.Monthly[merged_final$Quarterly.Monthly=="QUARTERLY"]<- "MONTHLY"
+merged_final <- merged_final %>% 
+  arrange(merged_final$Invoice_Number) 
+head(merged_final)
+```
+
+
+
+### Question Two
+
+Recall the hospital database. Recreate the physician-referral table from Question 9 on your SQL homework using R. I've loaded a zip folder of all the necessary csv files to do this on canvas, as well as a snapshot of what the table should look like for your reference. 
+
+```{r}
+#your code here
+physician <- fread("Physician.csv")
+patient <- fread("Patient.csv")
+appointment <- fread("Appointment.csv")
+undergoes <- fread("Undergoes.csv")
+med_procedure <- fread("Medical_Procedure.csv")
+affiliated_with <- fread("Affiliated_With.csv")
+department <- fread("Department.csv")
+
+```
+
+
+```{r}
+sub_patient <- patient %>% 
+  left_join(appointment, by=c("SSN" = "Patient")) %>% 
+  filter(PCP!= Physician) %>% 
+  mutate("Patient_SSN" = SSN, "Cost" = 0)  
+  
+```
+
+
+```{r}
+
+Table2_join <- patient %>% left_join(undergoes, by=c("SSN"="Patient")) %>% left_join(med_procedure, by=c("Medical_Procedure" = "Code")) %>% filter (PCP != Physician) %>% select (SSN, PCP, Physician, Cost) %>% rename(Patient_SSN=SSN)
+
+# Merging both into the dataframe  
+rawdata <- union_all(sub_patient, Table2_join )
+rawdata
+```
+
+```{r}
+
+# Making the department summary table by merging the affiliated_with table 
+department_summary <- merge(affiliated_with, department, by.x = 'Department', by.y='DepartmentID') 
+department_summary <- department_summary %>% 
+  select(Department, Name) %>% 
+  distinct(Department, Name) %>% 
+  rename(Department_Name = Name)
+
+# Making EmployeeID-Physician name as referential keys
+physician_summary <- merge(affiliated_with, physician, by.x = 'Physician', by.y='EmployeeID')
+physician_summary <- physician_summary %>% select(Physician, Department, Name) %>% rename(Physician_Name = Name)
+
+
+# Make a big reference table with the Physician and Department summaries combined
+physician_department_summary <- merge(physician_summary, department_summary, by='Department')
+physician_department_summary
+
+# I replace the column name Referral and Referring Physicians in this table 
+finaltable <- rawdata %>%
+  left_join(physician_department_summary, by=c("PCP" = "Physician")) %>% 
+  rename('Referring_Physician' = Physician_Name) %>% 
+  left_join(physician_department_summary, by=c("Physician")) %>% 
+  mutate(Referral = Physician_Name) %>%
+  select(Patient_SSN, Referral, Referring_Physician, Cost)
+
+finaltable
+```
+```{r}
+
+#Get the aggregation in the number of shared patients and total shared patient's cost
+num_shared_patients_costs <- finaltable %>% 
+  group_by(Referring_Physician, Referral) %>%
+  summarise(Shared_billing_costs= sum(Cost),Shared_patients = n_distinct(Patient_SSN)) %>% arrange(Referring_Physician)
+
+
+# Adjusted_Affiliated with table grouping by physician 
+adjusted_affiliated_with <- affiliated_with %>% 
+  group_by(Physician) %>% 
+  filter(PrimaryAffiliation== "1") 
+
+# Making Department Code-Department as referential keys
+adjusted_department_summary <- merge(adjusted_affiliated_with, department, by.x = 'Department', by.y='DepartmentID') %>% select (Department, Name) %>% distinct(Department, Name) %>% rename(Department_Name = Name)
+
+# Making EmployeeID-Physician name as referential keys
+adjusted_physician_summary <- merge(adjusted_affiliated_with, physician, by.x='Physician', by.y='EmployeeID') %>% 
+  rename(Physician_Name = Name) %>%
+  select(Physician, Department, Physician_Name) 
+
+
+# Combining the both adjusted summaries together
+adjusted_physician_deptartment_summary <- merge(adjusted_physician_summary, adjusted_department_summary, by='Department') 
+adjusted_physician_deptartment_summary<- adjusted_physician_deptartment_summary %>% 
+  select(Physician_Name, Department_Name)
+
+#Combining the final tables
+final_merged_result <- merge(num_shared_patients_costs, adjusted_physician_deptartment_summary, by.x='Referring_Physician', by.y='Physician_Name') %>% 
+  rename(Primary_Department=Department_Name) %>% 
+  merge(adjusted_physician_deptartment_summary, by.x='Referral', by.y='Physician_Name') %>% rename(Referral_Department=Department_Name) %>% 
+  arrange(Referring_Physician, desc(Shared_patients)) %>% 
+  select(Referring_Physician, Referral, Primary_Department,  Referral_Department, Shared_patients, Shared_billing_costs)
+
+final_merged_result
+```
+
+
+
+ 
+
+
+
+
+### Question Three
+
+Which tool did you find it 'easiest' to use while completing these exercises? What advice would you give novice data wranglers when it comes to choosing between Excel, SQL, and R? Please make your answer either a different text colour, or bolded, when you knit this document so TA's can find it. 
+
+
+
+**I found R to be the easiest while completing these exercises because R has a lot of built in functions/ packages that are necessary for me to clean data like removing uneccesary columns or null values.Excel has a lot of built in functions and I recommend to use the help function for all 3 platforms because the syntax can get messy when applying the same function to a specific column. When using Excel, I recommend to import some data and play around with the visual tools and some basic functions and queries necessary to transform and preprocess data. When using SQL, I recommend to be familiar with the common keywords that are used to query data. Once they get a grasp on the common keywords, then they can move on to some complex queries. Finally, when using R, the help function really should help novice data wranglers be familiar with the packages that are necessary to read in data, query data, subset dataframes, filter out data frames, and remove unnecessary column. They should also have a basic understanding on the functions used to generate common visual plots as well. **
+
+## Part Two
+
+We are going download US Census data using the Census API. To start, you will need to request a key here: <https://api.census.gov/data/key_signup.html>. 
+
+We'll be using the following package:
+
+```{r, include=F}
+#install.packages(tidycensus)
+library(tidycensus)
+```
+
+A vignette demonstrating much of the functionality of this package can be found here <https://walker-data.com/census-r/index.html>
+
+Start by setting your API key. 
+
+```{r}
+census_api_key("5c4e75b1d344c195de1c421444bb52400f92c18e")
+```
+
+The function 'get_acs()' will download the American Community Survey (ACS) Census data. You will need to know the variable ID - and there are thousands of variables across the different files. To rapidly search for variables, use the commands 'load_variables()' and 'View()'. We'll do this below:
+
+```{r}
+v19 <- load_variables(2019, "acs5", cache = TRUE)
+View(v19)
+```
+
+As you can see, there are many types of data avaiable to us in the census. In the View table, you can user filters to explore the kind of data that is available to you. For instance, try fitering by 'income' in the concept column.
+
+The full metadata is available here <https://www.socialexplorer.com/data/ACS2019_5yr/metadata/>. 
+
+For now, we'll use the following:
+
+```{r}
+newEngDat <- get_acs(geography = "new england city and town area", 
+              year = 2019,
+              variables = c(popn = "B03002_001", 
+                            white = "B03002_003", blk = "B03002_004", 
+                            asn = "B03002_006", hisp = "B03002_012", 
+                            medHouseInc="B19013_001", hlthInsCov="B27001_001",
+                            workPop="B08604_001",workTravel="B08013_001",
+                            workHome="B08006_017", mthExp="B25088_001", 
+                            mthHousing="B25105_001"), 
+              survey = "acs5",
+              output = "wide")
+```
+
+In the above code, we specified the following arguments:
+
+**geography:** The level of geography we want the data in
+**year:** The end year of the data (because we want 2015-2019, we use 2019).
+**variables:** The variables we want to bring in as specified in a vector you create using the function c(). Note that we created variable names of our own (e.g. "popn") and we put the ACS IDs in quotes ("B03002_001"). 
+**survey:** The specific Census survey were extracting data from. We want data from the 5-year American Community Survey, so we specify “acs5”. The ACS comes in 1-, 3-, and 5-year varieties.
+**output:** gives us a traditional dataset, alternatively "tidy" would give us a tibble.
+
+See ?get_acs for more variables you could request. 
+
+We then have the following columns in our data:
+
+**GEOID:** A unique ID variable of the geography
+**Name:** The Name of the geographic area
+**popn:** The total population
+**white:** The population of people who identify as white
+**blk:** The population of people who identify as black
+**asn:** The population of people who identify as asian
+**hisp:** The population of people who identify as hispanic
+**medHouseInc:** The median household income
+**hlthInsCov:** The population who have health insurance coverage
+**workPop:** The worker population
+**workTravel:** Aggregrate travel time to work, in minutes
+**workHome:** Number of workers who work from home
+**mthExp:** Median monthly cost of living estimate
+**mthHousing:** Median housing costs per month
+
+You'll notice that there is an 'E' and an 'M' beside each of the column names in your dataset. The 'E' stands for estimate, and 'M' margin of error. While important, we will not be analyzing margins of error. 
+
+### Question Four
+
+Remove the margin of error columns, and then remove the 'E' from the end of the other column names. 
+
+
+```{r}
+# your code here
+ 
+
+# Cols stores the columns with the M removed
+cols <- c("GEOID", "NAME")
+
+# This will store the updated columns with the Capital E removed at the end
+revised_col <- c("GEOID", "NAME")
+names_new_eng_dat <- names(newEngDat)
+
+
+# I loop through starting the 3rd column and then first append the columns with E to a temporary vector
+
+# cols and then I remove the "E, the last character of each column
+for (i in 3: length(names_new_eng_dat)){
+  if(str_sub(names_new_eng_dat[i], -1 ) == 'E'){
+    cols <- append(cols, names_new_eng_dat[i])
+    new_columns <- substr(names_new_eng_dat[i], 1, nchar(names_new_eng_dat[i]) - 1)
+    revised_col <- append(revised_col, new_columns)
+  }
+}
+
+revised_col
+# Store the updated columns with 'M' removed at the end
+newEngDat<- newEngDat[cols]
+
+ 
+names(newEngDat) <- revised_col
+newEngDat
+
+
+
+```
+
+
+
+### Question 5
+
+Which 10 communities have the largest proportion of their working population work from home?
+
+```{r}
+# your code here
+
+newEngDat2 <- newEngDat %>%
+  mutate(workprop = workHome/workPop) %>%
+  select(NAME, workprop) %>%
+  arrange(desc(workprop))
+head(newEngDat2,10)
+ 
+```
+
+
+### Question 6
+
+We'll define discretionary income as Income-Expenses. Right now, you have annual income and monthly expenses. Create a new column to calculate monthly discretionay income, and display the towns with the highest amounts of discretionary income.
+
+```{r}
+# your code here
+newEngDat$yearInc  <- newEngDat$medHouseInc / 12
+newEngDat$monthly_disc_in <- newEngDat$yearInc - newEngDat$mthExp
+newEngDat_new <- newEngDat %>%
+  select(NAME, "Discretionary_Income" = monthly_disc_in) %>%
+  arrange(desc(Discretionary_Income))
+head(newEngDat_new, 10)
+```
+
+### Question 7
+
+Which 5 towns have the largest proportional gaps in healthcare coverage?
+
+```{r}
+# your code here
+newEngDat$prop_gap <- (newEngDat$popn - newEngDat$hlthInsCov) / newEngDat$popn
+newEngDatprop <- newEngDat %>% 
+  select("Town Names" = NAME, "Proportional_Gap" = prop_gap) %>%
+  arrange(desc(Proportional_Gap))
+head(newEngDatprop,5)
+```
+
+
+### Question 8
+
+The divesity index of a geographic area is the probability that two people selected at random will be the same race. Create a function which will sample from the reported ethnic population in each geographic area and return the diversity index. Display the top 5 diverse towns. 
+
+```{r}
+# your code here
+
+div_ind <- c()
+diversity <- function(area){
+  whitepropind <- (newEngDat$white[area] / newEngDat$popn[area]) ** 2
+  blackpropind <- (newEngDat$blk[area] / newEngDat$popn[area]) **2
+  asianpropind <- (newEngDat$asn[area] / newEngDat$popn[area]) **2
+  hispanicpropind <- (newEngDat$hisp[area] / newEngDat$popn[area]) **2  
+  div_index <- 1- ((whitepropind)  + (blackpropind) + (asianpropind) + (hispanicpropind ))
+}
+
+for (i in 1:40){
+  div_values <- diversity(i)
+  div_ind <- c(div_ind, div_values)
+}
+
+newEngDat$div_index <- div_ind
+NewEngDat_Diversity <- newEngDat %>%
+  select(NAME, div_index) %>%
+  arrange(desc(div_ind))
+head(NewEngDat_Diversity,5)
+
+
+ 
+```
+
+### Question 9
+
+Convert the ethnicity columns to be percentages. Make a boxplot where each ethnicity is represented on the x-axis, and percent is on the y-axis. Points will be awarded for 'prettier' plots!
+
+```{r}
+#your code here
+newEngDat$whiteprop <- (newEngDat$white / newEngDat$popn) * 100
+newEngDat$blackprop <- (newEngDat$blk / newEngDat$popn) * 100
+newEngDat$asianprop <- (newEngDat$asn / newEngDat$popn) * 100
+newEngDat$hispanicprop <- (newEngDat$hisp / newEngDat$popn) * 100
+newEngDat_Eth <- newEngDat %>% 
+  select(whiteprop, blackprop, asianprop, hispanicprop)
+
+
+
+library(ggplot2)
+library(lattice)
+require(reshape2)
+
+boxplot(newEngDat$whiteprop, newEngDat$blackprop, newEngDat$asianprop, newEngDat$hispanicprop, xlab = 'Ethnicity', ylab = 'Percentage of Populations', main = "Relationship the proportion between all ethnic groups", notch = TRUE, top = TRUE, names = c("White", "Black", "Asian", "Hispanic"), col=(c("red","blue", "green", "yellow")))
+
+```
+
+### Question 10
+
+Ask a question of your choosing. Output both the head of a table, and a simple plot answering your question. Feel free to use the API to import extra variables that may be of interest to you. 
+
+**Question: Display the top 10 names with the highest poverty rate and make a simple plot establishing the relationship between poverty proportion and working proportion where poverty proportion is on the x axis and working proportion is on the Y axis**
+
+```{r}
+
+# I only select clumns that are necessary to answer my own question. I did not remove the E at the end of each variable or the margin of error columns
+newEngDataq10 <- get_acs(geography = "new england city and town area", 
+              year = 2019,
+              variables = c(popn = "B03002_001", 
+                            pov = "B17023_001",
+                            hlthInsCov="B27001_001",
+                            workPop="B08604_001"), 
+              survey = "acs5",
+              output = "wide")
+```
+```{r}
+newEngDataq10
+```
+
+```{r}
+newEngDat_q10 <- newEngDataq10 %>% 
+  mutate(PovProp = povE/popnE)%>%
+  mutate(workprop = workPopE / popnE) %>%
+  select(NAME, PovProp, workprop) %>%
+  arrange(desc(PovProp))
+
+head(newEngDat_q10,10)
+
+ 
+
+```
+
+
+```{r}
+ggplot(newEngDat_q10 ,
+       aes(x = PovProp, 
+           y = workprop)) +
+  geom_point(color= "steelblue") +
+  geom_smooth(method = "lm") + labs(x = "Poverty Proportion", y = "Working Proportion") + ggtitle("Relationship Between Poverty Proportion and Working Proportion")
+```
+
+
+
